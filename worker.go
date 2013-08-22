@@ -1,13 +1,14 @@
 package main
 
 import (
-	"crypto/sha256"
+	"hash/crc32"
 	"encoding/hex"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
+	"sync"
 )
 
 type WorkerGroup struct {
@@ -22,9 +23,12 @@ type WorkerGroup struct {
 
 	out        chan FileStatus
 	sendStatus bool
+	waitGroup *sync.WaitGroup
 }
 
 const TimeFormat = "Mon, 02 Jan 2006 15:04:05 GMT"
+
+var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
 func NewWorkerGroup(vhost *VHost, server string, status *StatusBoard, in FileChannel) *WorkerGroup {
 	wg := new(WorkerGroup)
@@ -42,6 +46,7 @@ func (wg *WorkerGroup) SetOutput(ch chan FileStatus) {
 
 func (wg *WorkerGroup) Start() {
 	go wg.run(wg.n)
+	wg.waitGroup.Add(1)
 	wg.n++
 }
 
@@ -55,14 +60,12 @@ func (wg *WorkerGroup) run(id int) {
 		file := <-wg.in
 		// log.Printf("%d FILE: %#v\n", id, file)
 		if file == nil {
-			// log.Println(id, "got nil file")
-			wg.status.UpdateStatusBoard(id, ".", "Done", 'x')
 			break
 		}
-
 		wg.getFile(id, client, file)
 	}
-
+	wg.status.UpdateStatusBoard(id, ".", "Done", 'x')
+	wg.waitGroup.Done()
 	// log.Printf("Worker %d done", id)
 }
 
@@ -155,8 +158,8 @@ func (wg *WorkerGroup) getFile(id int, client *http.Client, file *File) {
 
 	wg.status.UpdateStatusBoard(id, file.Path, "Reading response, making checksum", 'r')
 
-	sha := sha256.New()
-	size, err := io.Copy(sha, resp.Body)
+	crc := crc32.New(crcTable)
+	size, err := io.Copy(crc, resp.Body)
 	if err != nil {
 		fs.ReadError = true
 		log.Printf("%d Could not read file '%s': %s", id, file.Path, err)
@@ -168,13 +171,13 @@ func (wg *WorkerGroup) getFile(id int, client *http.Client, file *File) {
 		log.Printf("'%s' has wrong size (%d, expected %d)\n", file.Path, fs.Size, file.Size)
 	}
 
-	fs.Checksum = hex.EncodeToString(sha.Sum(nil))
+	fs.Checksum = hex.EncodeToString(crc.Sum(nil))
 
 	// log.Printf("expected checksum for '%s': %s, got %s", file.Path, file.Sha256Expected, fs.Checksum)
 
-	if len(file.Sha256Expected) > 0 && fs.Checksum != file.Sha256Expected {
+	if len(file.CrcExpected) > 0 && fs.Checksum != file.CrcExpected {
 		fs.BadChecksum = true
-		log.Printf("%d Wrong SHA256 for '%s' (size %d)\n", id, file.Path, size)
+		log.Printf("%d Wrong crc32 for '%s' (size %d)\n", id, file.Path, size)
 	} else {
 		// log.Println("Ok!")
 	}

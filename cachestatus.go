@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"sync"
+	"errors"
 )
 
 // ServerName of the current box
@@ -19,7 +21,7 @@ var ServerName string
 
 type File struct {
 	Path           string
-	Sha256Expected string
+	CrcExpected string
 	Size           int64
 	LastModified   time.Time
 	LastChecked    time.Time
@@ -39,6 +41,7 @@ var (
 	flagWorkers            = flag.Int("workers", 6, "How many concurrent requests to make")
 	flagVersion            = flag.Bool("version", false, "Show version")
 	flagVerbose            = flag.Bool("verbose", false, "Verbose output")
+	flagPort               = flag.String("port", "", "Http server port to listen on")
 )
 
 func init() {
@@ -67,14 +70,32 @@ func init() {
 	}
 
 	if *flagVerbose {
-		log.Printf("Using up to %d CPUs for sha256'ing\n", ncpus)
+		log.Printf("Using up to %d CPUs for crc32'ing\n", ncpus)
 	}
 	runtime.GOMAXPROCS(ncpus)
 
 }
 
 func main() {
+	if *flagPort != "" {
+		log.Println("Http Server Mode.")
+		serverMode()
+	}else {
+		log.Println("Command Line Mode.")
+		commandLineMode()
+	}
+}
 
+
+func serverMode() {
+	http.Handle("/cachestatus", new(CacheHandler))
+	http.Handle("/manifest/", new(ManifestHandler))
+	http.Handle("/filelist/", new(FilelistHandler))
+	http.ListenAndServe(":"+*flagPort, nil)
+}
+
+
+func commandLineMode() {
 	if len(*flagListLocation) == 0 {
 		log.Fatalln("-filelist url option is required")
 	}
@@ -96,8 +117,10 @@ func main() {
 
 	status := NewStatusBoard(nworkers)
 
-	w := NewWorkerGroup(vhost, *flagServer, status, workQueue)
+	waitGroup := new(sync.WaitGroup)
 
+	w := NewWorkerGroup(vhost, *flagServer, status, workQueue)
+	w.waitGroup = waitGroup
 	if *flagChecksum {
 		w.Options.Checksum = true
 	}
@@ -112,7 +135,7 @@ func main() {
 	}
 
 	for n := 0; n < nworkers; n++ {
-		go w.Start()
+		w.Start()
 	}
 
 	go status.Printer()
@@ -122,13 +145,7 @@ func main() {
 		workQueue <- vhost.Files[i]
 	}
 
-	for n := 0; n < nworkers; n++ {
-		// this isn't buffered so it makes sure each worker is idle
-		// before we continue
-		workQueue <- nil
-	}
-
-	time.Sleep(1 * time.Second)
+	waitGroup.Wait()
 
 	for n, st := range status.Status {
 		log.Println(n, st.Path, st.Status, string(st.Mark))
@@ -184,20 +201,20 @@ func getFileList(vhost *VHost) error {
 	if strings.HasSuffix(url, ".json") {
 		files, err := ReadManifest(body)
 		if err != nil {
-			log.Fatalf("Error parsing manifest %s: %s", url, err)
+			return errors.New(fmt.Sprintf("Error parsing manifest %s: %s", url, err))
 		}
 		vhost.Files = files
 	}
 
 	scanner := bufio.NewScanner(body)
 	for scanner.Scan() {
-		shaPath := strings.SplitN(scanner.Text(), "  .", 2)
+		crcPath := strings.SplitN(scanner.Text(), "  .", 2)
 		file := new(File)
-		if len(shaPath) > 1 {
-			file.Sha256Expected = shaPath[0]
-			file.Path = shaPath[1]
+		if len(crcPath) > 1 {
+			file.CrcExpected = crcPath[0]
+			file.Path = crcPath[1]
 		} else {
-			file.Path = shaPath[0]
+			file.Path = crcPath[0]
 		}
 		if len(file.Path) == 0 {
 			continue
@@ -207,7 +224,7 @@ func getFileList(vhost *VHost) error {
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	return nil

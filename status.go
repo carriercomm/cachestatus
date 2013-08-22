@@ -8,7 +8,7 @@ import (
 )
 
 type StatusBoard struct {
-	Status       []*WorkerStatus
+	Status       []*WorkerStatus `json:"-"`
 	BadFiles     []string
 	Checks       int
 	Misses       int

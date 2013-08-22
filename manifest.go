@@ -42,7 +42,7 @@ func ReadManifest(body io.Reader) ([]*File, error) {
 		file := new(File)
 		file.Path = entry.Path
 		file.Size = entry.Size
-		file.Sha256Expected = entry.Checksum
+		file.CrcExpected = entry.Checksum
 		file.LastModified = entry.LastModified
 
 		files = append(files, file)

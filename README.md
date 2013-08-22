@@ -12,7 +12,7 @@ You can also specify a local file url: file:///some/path/file.txt or /some/path/
 
 The text files can be in the format
 
-    sha256  ./path/to/file
+    crc32  ./path/to/file
 
 or just a file path per line.
 
