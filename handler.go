@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -49,12 +50,11 @@ func (*CacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	workGroup.Options.Checksum = checksum
 
 	var manifest *Manifest
-	//	var manifestBuf *bytes.Buffer
+	var manifestBuf *bytes.Buffer
 	if createManifest {
-		//		manifestBuf = bytes.NewBuffer(nil)
-		manifest = CreateManifest(w)
+		manifestBuf = new(bytes.Buffer)
+		manifest = CreateManifest(manifestBuf)
 		workGroup.SetOutput(manifest.in)
-		defer manifest.Close()
 	}
 
 	for i := 0; i < workers; i++ {
@@ -70,7 +70,13 @@ func (*CacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	waitGroup.Wait()
 
-	if !createManifest {
+	if manifest != nil {
+		manifest.Close()
+	}
+
+	if createManifest && status.BadFiles == nil {
+		w.Write(manifestBuf.Bytes())
+	} else {
 		buf, _ := json.MarshalIndent(status, "", "\t")
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(buf)
