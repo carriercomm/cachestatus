@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"time"
 )
 
 type Manifest struct {
-	fh   *os.File
-	in   chan FileStatus
-	quit chan bool
+	writer io.Writer
+	in     chan FileStatus
+	quit   chan bool
 }
 
 type ManifestEntry struct {
@@ -42,7 +41,7 @@ func ReadManifest(body io.Reader) ([]*File, error) {
 		file := new(File)
 		file.Path = entry.Path
 		file.Size = entry.Size
-		file.CrcExpected = entry.Checksum
+		file.ChecksumExpected = entry.Checksum
 		file.LastModified = entry.LastModified
 
 		files = append(files, file)
@@ -51,17 +50,13 @@ func ReadManifest(body io.Reader) ([]*File, error) {
 
 }
 
-func CreateManifest(path string) (*Manifest, error) {
-	fh, err := os.Create(path)
-	if err != nil {
-		return nil, err
-	}
+func CreateManifest(writer io.Writer) *Manifest {
 	m := new(Manifest)
-	m.fh = fh
+	m.writer = writer
 	m.in = make(chan FileStatus, 200)
 	m.quit = make(chan bool)
 	go m.readQ()
-	return m, nil
+	return m
 }
 
 func (m *Manifest) readQ() {
@@ -80,7 +75,7 @@ func (m *Manifest) readQ() {
 				log.Printf("Error creating json: %s", err)
 			}
 			msg = append(msg, "\n"...)
-			_, err = m.fh.Write(msg)
+			_, err = m.writer.Write(msg)
 			if err != nil {
 				log.Printf("Error writing to manifest: %s", err)
 			}
@@ -92,5 +87,7 @@ func (m *Manifest) readQ() {
 
 func (m *Manifest) Close() {
 	m.quit <- true
-	m.fh.Close()
+	if writerCloser, ok := m.writer.(io.WriteCloser); ok {
+		writerCloser.Close()
+	}
 }

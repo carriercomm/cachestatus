@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,21 +12,20 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"time"
 	"sync"
-	"errors"
+	"time"
 )
 
 // ServerName of the current box
 var ServerName string
 
 type File struct {
-	Path           string
-	CrcExpected string
-	Size           int64
-	LastModified   time.Time
-	LastChecked    time.Time
-	Cached         bool
+	Path             string
+	ChecksumExpected string
+	Size             int64
+	LastModified     time.Time
+	LastChecked      time.Time
+	Cached           bool
 }
 
 type FileChannel chan *File
@@ -42,6 +42,7 @@ var (
 	flagVersion            = flag.Bool("version", false, "Show version")
 	flagVerbose            = flag.Bool("verbose", false, "Verbose output")
 	flagPort               = flag.String("port", "", "Http server port to listen on")
+	flagHashFunction       = flag.String("hash", "sha256", "hash function, sha256 or crc32")
 )
 
 func init() {
@@ -70,7 +71,7 @@ func init() {
 	}
 
 	if *flagVerbose {
-		log.Printf("Using up to %d CPUs for crc32'ing\n", ncpus)
+		log.Printf("Using up to %d CPUs for checksum'ing\n", ncpus)
 	}
 	runtime.GOMAXPROCS(ncpus)
 
@@ -80,20 +81,16 @@ func main() {
 	if *flagPort != "" {
 		log.Println("Http Server Mode.")
 		serverMode()
-	}else {
+	} else {
 		log.Println("Command Line Mode.")
 		commandLineMode()
 	}
 }
 
-
 func serverMode() {
 	http.Handle("/cachestatus", new(CacheHandler))
-	http.Handle("/manifest/", new(ManifestHandler))
-	http.Handle("/filelist/", new(FilelistHandler))
 	http.ListenAndServe(":"+*flagPort, nil)
 }
-
 
 func commandLineMode() {
 	if len(*flagListLocation) == 0 {
@@ -126,10 +123,12 @@ func commandLineMode() {
 	}
 
 	if len(*flagCreateManifestPath) > 0 {
-		manifest, err := CreateManifest(*flagCreateManifestPath)
+		manifestFile, err := os.Create(*flagCreateManifestPath)
 		if err != nil {
 			log.Fatalf("Could not open manifest '%s': %s", *flagCreateManifestPath, err)
 		}
+		manifest := CreateManifest(manifestFile)
+
 		defer manifest.Close()
 		w.SetOutput(manifest.in)
 	}
@@ -208,13 +207,13 @@ func getFileList(vhost *VHost) error {
 
 	scanner := bufio.NewScanner(body)
 	for scanner.Scan() {
-		crcPath := strings.SplitN(scanner.Text(), "  .", 2)
+		checksumPath := strings.SplitN(scanner.Text(), "  .", 2)
 		file := new(File)
-		if len(crcPath) > 1 {
-			file.CrcExpected = crcPath[0]
-			file.Path = crcPath[1]
+		if len(checksumPath) > 1 {
+			file.ChecksumExpected = checksumPath[0]
+			file.Path = checksumPath[1]
 		} else {
-			file.Path = crcPath[0]
+			file.Path = checksumPath[0]
 		}
 		if len(file.Path) == 0 {
 			continue

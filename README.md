@@ -12,7 +12,7 @@ You can also specify a local file url: file:///some/path/file.txt or /some/path/
 
 The text files can be in the format
 
-    crc32  ./path/to/file
+    checksum  ./path/to/file
 
 or just a file path per line.
 

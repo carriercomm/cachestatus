@@ -1,23 +1,23 @@
-
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
-	"encoding/json"
-	"fmt"
-	"os"
-	"io"
 )
 
 type CacheHandler struct {
-	
 }
 
 func (*CacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	filelist := r.FormValue("filelist")
-	createManifestPath := r.FormValue("createmanifest")
+	validFilelist := strings.HasPrefix(filelist, "http://") || strings.HasPrefix(filelist, "https://")
+	if !validFilelist {
+		http.Error(w, "filelist must be http url", 400)
+		return
+	}
 	server := r.FormValue("server")
 	if server == "" {
 		server = "localhost"
@@ -31,6 +31,8 @@ func (*CacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("version") == "true" {
 		w.Header().Set("Version", VERSION)
 	}
+	createManifest := r.FormValue("createmanifest") == "true"
+
 	vhost := new(VHost)
 	vhost.FileListLocation = filelist
 	vhost.Hostname = hostname
@@ -46,13 +48,13 @@ func (*CacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	workGroup.waitGroup = waitGroup
 	workGroup.Options.Checksum = checksum
 
-	if len(createManifestPath) > 0 {
-		manifest, err := CreateManifest(createManifestPath)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Could not open manifest '%s': %s", createManifestPath, err), 400)
-		}
-		defer manifest.Close()
+	var manifest *Manifest
+	//	var manifestBuf *bytes.Buffer
+	if createManifest {
+		//		manifestBuf = bytes.NewBuffer(nil)
+		manifest = CreateManifest(w)
 		workGroup.SetOutput(manifest.in)
+		defer manifest.Close()
 	}
 
 	for i := 0; i < workers; i++ {
@@ -67,59 +69,10 @@ func (*CacheHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		workQueue <- nil
 	}
 	waitGroup.Wait()
-	buf, _ := json.MarshalIndent(status, "", "\t")
-	w.Write(buf)
-}
 
-type ManifestHandler struct {
-
-}
-
-func (*ManifestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	manifestPath := r.URL.Path[len("/manifest"):]
-
-	if r.Method == "GET" {
-		file, err := os.Open(manifestPath)
-		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		defer file.Close()
-		io.Copy(w, file)
-	}else if r.Method == "POST" {
-		file, err := os.Create(manifestPath)
-		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		defer file.Close()
-		io.Copy(file, r.Body)
+	if !createManifest {
+		buf, _ := json.MarshalIndent(status, "", "\t")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buf)
 	}
-}
-
-type FilelistHandler struct {
-
-}
-
-func (*FilelistHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	filelistPath := r.URL.Path[len("/filelist"):]
-
-	if r.Method == "GET" {
-		file, err := os.Open(filelistPath)
-		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		defer file.Close()
-		io.Copy(w, file)
-	} else if r.Method == "POST" {
-		file, err := os.Create(filelistPath)
-		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		defer file.Close()
-		io.Copy(file, r.Body)
-	}
-
 }

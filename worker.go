@@ -1,14 +1,16 @@
 package main
 
 import (
-	"hash/crc32"
+	"crypto/sha256"
 	"encoding/hex"
+	"hash"
+	"hash/crc32"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
-	"time"
 	"sync"
+	"time"
 )
 
 type WorkerGroup struct {
@@ -23,7 +25,7 @@ type WorkerGroup struct {
 
 	out        chan FileStatus
 	sendStatus bool
-	waitGroup *sync.WaitGroup
+	waitGroup  *sync.WaitGroup
 }
 
 const TimeFormat = "Mon, 02 Jan 2006 15:04:05 GMT"
@@ -157,9 +159,14 @@ func (wg *WorkerGroup) getFile(id int, client *http.Client, file *File) {
 	}
 
 	wg.status.UpdateStatusBoard(id, file.Path, "Reading response, making checksum", 'r')
+	var hashFunction hash.Hash
+	if *flagHashFunction == "crc32" {
+		hashFunction = crc32.New(crcTable)
+	} else {
+		hashFunction = sha256.New()
+	}
 
-	crc := crc32.New(crcTable)
-	size, err := io.Copy(crc, resp.Body)
+	size, err := io.Copy(hashFunction, resp.Body)
 	if err != nil {
 		fs.ReadError = true
 		log.Printf("%d Could not read file '%s': %s", id, file.Path, err)
@@ -171,13 +178,13 @@ func (wg *WorkerGroup) getFile(id int, client *http.Client, file *File) {
 		log.Printf("'%s' has wrong size (%d, expected %d)\n", file.Path, fs.Size, file.Size)
 	}
 
-	fs.Checksum = hex.EncodeToString(crc.Sum(nil))
+	fs.Checksum = hex.EncodeToString(hashFunction.Sum(nil))
 
 	// log.Printf("expected checksum for '%s': %s, got %s", file.Path, file.Sha256Expected, fs.Checksum)
 
-	if len(file.CrcExpected) > 0 && fs.Checksum != file.CrcExpected {
+	if len(file.ChecksumExpected) > 0 && fs.Checksum != file.ChecksumExpected {
 		fs.BadChecksum = true
-		log.Printf("%d Wrong crc32 for '%s' (size %d)\n", id, file.Path, size)
+		log.Printf("%d Wrong checksum for '%s' (size %d)\n", id, file.Path, size)
 	} else {
 		// log.Println("Ok!")
 	}
